@@ -414,6 +414,19 @@ function BudgetApp({ onDisconnect }) {
     showToast("Expense saved!");
   };
 
+  const addExpensesBulk = async (rows) => {
+    const db = getDB(); if (!db) return;
+    await Promise.all(rows.map((row, i) => {
+      const id = (Date.now() + i).toString();
+      const mk = row.date.slice(0, 7);
+      return setDoc(doc(db, EXP_COL, id), {
+        id, amount: row.amount, notes: row.notes, date: row.date,
+        photo: null, splits: [{ cat: row.category, pct: 100 }], monthKey: mk,
+      });
+    }));
+    showToast(`${rows.length} expense${rows.length !== 1 ? "s" : ""} imported!`);
+  };
+
   const deleteExpense = async (id) => {
     const db = getDB(); if (!db) return;
     await deleteDoc(doc(db, EXP_COL, id));
@@ -488,7 +501,7 @@ function BudgetApp({ onDisconnect }) {
               ))}
             </div>
 
-            {sideTab === "add" && <AddForm categories={categories} onAdd={addExpense} showToast={showToast} />}
+            {sideTab === "add" && <AddForm categories={categories} onAdd={addExpense} onBulkAdd={addExpensesBulk} showToast={showToast} />}
 
             {sideTab === "budget" && (
               <div className="budget-panel">
@@ -704,7 +717,7 @@ function BudgetApp({ onDisconnect }) {
 }
 
 // ─── Add Expense Form ─────────────────────────────────────────────────────────
-function AddForm({ categories, onAdd, showToast }) {
+function AddForm({ categories, onAdd, onBulkAdd, showToast }) {
   const [photo, setPhoto]   = useState(null);
   const [amount, setAmount] = useState("");
   const [notes, setNotes]   = useState("");
@@ -741,6 +754,11 @@ function AddForm({ categories, onAdd, showToast }) {
 
   return (
     <div className="add-form">
+      <div>
+        <div className="form-section-label">Import from CSV</div>
+        <ExpenseUpload categories={categories} onUpload={onBulkAdd} onError={msg => showToast(msg, "error")} />
+      </div>
+      <div className="divider" />
       <div>
         <div className="form-section-label">Receipt Photo (optional)</div>
         <div className={`photo-zone ${photo?"has-photo":""}`} onClick={() => fileRef.current.click()}>
@@ -791,6 +809,107 @@ function AddForm({ categories, onAdd, showToast }) {
       <button className="btn btn-primary btn-full" onClick={submit} disabled={!amount||!pctOk}>
         Save Expense
       </button>
+    </div>
+  );
+}
+
+// ─── Expense CSV Upload ────────────────────────────────────────────────────────
+function ExpenseUpload({ categories, onUpload, onError }) {
+  const fileRef = useRef();
+  const [preview, setPreview] = useState(null);
+  const [dragging, setDragging] = useState(false);
+
+  const parseCSV = (text) => {
+    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) { onError("CSV must have a header row and at least one data row."); return null; }
+    const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/['"]/g, ""));
+    const dateIdx = header.findIndex(h => ["date","day"].includes(h));
+    const amtIdx  = header.findIndex(h => ["amount","amt","total","cost","price"].includes(h));
+    const catIdx  = header.findIndex(h => ["category","cat","type"].includes(h));
+    const noteIdx = header.findIndex(h => ["notes","note","description","desc","memo"].includes(h));
+    if (amtIdx === -1 || catIdx === -1) { onError('CSV needs "Amount" and "Category" columns.'); return null; }
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map(c => c.trim().replace(/^["']|["']$/g, ""));
+      const amount   = parseFloat((cols[amtIdx] || "").replace(/[$,]/g, ""));
+      const category = cols[catIdx] || "";
+      const notes    = noteIdx >= 0 ? (cols[noteIdx] || "") : "";
+      let date = dateIdx >= 0 ? (cols[dateIdx] || today()) : today();
+      if (date && !date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const d = new Date(date);
+        date = isNaN(d) ? today() : d.toISOString().split("T")[0];
+      }
+      if (!category || isNaN(amount) || amount <= 0) continue;
+      rows.push({ date, amount, category, notes });
+    }
+    if (!rows.length) { onError("No valid rows found in the CSV."); return null; }
+    return rows;
+  };
+
+  const handleFile = (file) => {
+    if (!file || !file.name.endsWith(".csv")) { onError("Please upload a .csv file."); return; }
+    const reader = new FileReader();
+    reader.onload = e => { const rows = parseCSV(e.target.result); if (rows) setPreview(rows); };
+    reader.readAsText(file);
+  };
+
+  const downloadTemplate = () => {
+    const d = today();
+    const csv = `Date,Amount,Category,Notes\n${d},45.00,Groceries,Weekly shopping\n${d},12.50,Dining Out,Lunch\n`;
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = "expenses-template.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (preview) {
+    const total = preview.reduce((a, r) => a + r.amount, 0);
+    return (
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        <div style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, overflow:"hidden" }}>
+          <div style={{ padding:"8px 12px", borderBottom:"1px solid var(--border)", fontSize:11, color:"var(--muted)", display:"flex", justifyContent:"space-between" }}>
+            <span>{preview.length} expenses</span>
+            <span style={{ fontFamily:"var(--mono)" }}>{fmt(total)} total</span>
+          </div>
+          <div style={{ maxHeight:180, overflowY:"auto" }}>
+            {preview.map((r, i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 12px", borderBottom:i<preview.length-1?"1px solid var(--border)":"none", fontSize:12, gap:8 }}>
+                <span style={{ color:"var(--text-dim)", fontFamily:"var(--mono)", fontSize:11, flexShrink:0 }}>{r.date}</span>
+                <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.category}{r.notes ? ` · ${r.notes}` : ""}</span>
+                <span style={{ fontFamily:"var(--mono)", color:"var(--indigo-l)", flexShrink:0 }}>{fmt(r.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:8 }}>
+          <button className="btn btn-ghost btn-sm" style={{ flex:1 }} onClick={() => setPreview(null)}>Cancel</button>
+          <button className="btn btn-primary btn-sm" style={{ flex:1 }} onClick={() => { onUpload(preview); setPreview(null); }}>
+            Import {preview.length} Expense{preview.length !== 1 ? "s" : ""}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+      <div className={`photo-zone ${dragging?"drag":""}`} style={{ padding:"16px 12px" }}
+        onClick={() => fileRef.current.click()}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}>
+        <svg width="20" height="20" fill="none" stroke="var(--muted)" strokeWidth="1.5" viewBox="0 0 24 24">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span className="photo-zone-text">Drop a CSV here or tap to browse</span>
+      </div>
+      <input ref={fileRef} type="file" accept=".csv" style={{ display:"none" }} onChange={e => handleFile(e.target.files[0])} />
+      <button className="btn btn-ghost btn-sm btn-full" onClick={downloadTemplate}>↓ Download Template CSV</button>
+      <p style={{ fontSize:11, color:"var(--muted)", textAlign:"center" }}>
+        Columns: <code style={{ fontFamily:"var(--mono)", color:"var(--indigo-l)" }}>Date</code>, <code style={{ fontFamily:"var(--mono)", color:"var(--indigo-l)" }}>Amount</code>, <code style={{ fontFamily:"var(--mono)", color:"var(--indigo-l)" }}>Category</code>, <code style={{ fontFamily:"var(--mono)", color:"var(--indigo-l)" }}>Notes</code>
+      </p>
     </div>
   );
 }
