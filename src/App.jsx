@@ -114,7 +114,7 @@ const styles = `
   .section-title{font-size:12px;font-weight:600;color:var(--text-dim);letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px;}
 
   /* pulse bars */
-  .cat-grid{display:flex;flex-direction:column;gap:8px;}
+  .cat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
   .cat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;}
   .cat-header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}
   .cat-name{font-size:13px;font-weight:500;}
